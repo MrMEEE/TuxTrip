@@ -170,26 +170,33 @@ with app.app_context():
 NOMINATIM_URL = "http://localhost:8080/search" # Your Nominatim container
 OSRM_URL = "http://localhost:5000/route/v1/driving" # Your OSRM container
 
-def lookup_address_nominatim(address):
+def lookup_address_nominatim(query): # Renamed 'address' to 'query' for clarity
     params = {
-        "q": address,
+        "q": query,
         "format": "json",
-        "limit": 1
+        "limit": 5 # Limit to 5 suggestions for autocomplete
     }
     try:
         response = requests.get(NOMINATIM_URL, params=params)
         response.raise_for_status() # Raise an exception for HTTP errors
         data = response.json()
-        if data:
-            return {
-                "display_name": data[0].get("display_name"),
-                "latitude": float(data[0].get("lat")),
-                "longitude": float(data[0].get("lon"))
-            }
-        return {"message": "Ingen resultater fundet."}
+        
+        suggestions = []
+        for item in data:
+            suggestions.append({
+                "place_id": item.get("place_id"), # Unique ID from Nominatim
+                "display_name": item.get("display_name"),
+                "latitude": float(item.get("lat")),
+                "longitude": float(item.get("lon"))
+            })
+        return suggestions # Return a list of dictionaries
+
     except requests.exceptions.RequestException as e:
         app.logger.error(f"Nominatim API fejl: {e}")
-        return {"message": f"Fejl ved opslag af adresse: {e}"}
+        return [] # Return empty list on error
+    except Exception as e:
+        app.logger.error(f"Fejl ved parsing af Nominatim data: {e}")
+        return [] # Return empty list on error
 
 def get_route_distance_osrm(start_lat, start_lon, end_lat, end_lon):
     # OSRM expects coordinates as longitude,latitude
@@ -320,13 +327,16 @@ def admin_delete_user(user_id):
 
 # Location API
 @app.route('/api/lookup-address', methods=['GET'])
-# No need for jwt_required here, as this is a public utility for everyone
 def lookup_address():
-    address = request.args.get('address')
-    if not address:
-        return jsonify({"message": "Adresseparameter mangler"}), 400
-    result = lookup_address_nominatim(address)
-    return jsonify(result)
+    query = request.args.get('address') # Renamed 'address' to 'query'
+    if not query:
+        return jsonify({"message": "Adresseparameter (query) mangler"}), 400
+    
+    # Now call the modified lookup_address_nominatim which returns a list
+    suggestions = lookup_address_nominatim(query)
+    
+    # Return the list of suggestions
+    return jsonify(suggestions)
 
 @app.route('/api/locations', methods=['POST'])
 @jwt_required() # Protect this route
@@ -369,6 +379,84 @@ def get_locations():
     locations = Location.query.filter_by(user_id=int(current_user_id)).all() # Ensure user_id is int
     return jsonify([loc.to_dict() for loc in locations])
 
+
+@app.route('/api/locations/<int:location_id>', methods=['PUT'])
+@jwt_required()
+def update_location(location_id):
+    current_user_id = int(get_jwt_identity())
+    location = Location.query.get(location_id)
+
+    if not location:
+        return jsonify({"message": "Lokation ikke fundet"}), 404
+
+    # Ensure the user owns this location or is an admin
+    if location.user_id != current_user_id:
+        # Check if current user is an admin
+        user = User.query.get(current_user_id)
+        if not user or not user.is_admin:
+            return jsonify({"message": "Uautoriseret: Du har ikke adgang til denne lokation"}), 403
+
+    data = request.get_json()
+    name = data.get('name')
+    address = data.get('address')
+    latitude = data.get('latitude')
+    longitude = data.get('longitude')
+    description = data.get('description')
+
+    if not all([name, latitude is not None, longitude is not None]):
+        return jsonify({"message": "Navn, breddegrad og længdegrad er påkrævet"}), 400
+
+    try:
+        location.name = name
+        location.address = address
+        location.latitude = float(latitude)
+        location.longitude = float(longitude)
+        location.description = description # description can be None
+
+        db.session.commit()
+        return jsonify({"message": "Lokation opdateret!", "location": location.to_dict()}), 200
+    except ValueError:
+        db.session.rollback()
+        return jsonify({"message": "Ugyldige breddegrad/længdegrad værdier"}), 400
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Fejl ved opdatering af lokation: {e}", exc_info=True)
+        return jsonify({"message": f"Fejl ved opdatering af lokation: {str(e)}"}), 500
+
+
+@app.route('/api/locations/<int:location_id>', methods=['DELETE'])
+@jwt_required()
+def delete_location(location_id):
+    current_user_id = int(get_jwt_identity())
+    location = Location.query.get(location_id)
+
+    if not location:
+        return jsonify({"message": "Lokation ikke fundet"}), 404
+
+    # Ensure the user owns this location or is an admin
+    if location.user_id != current_user_id:
+        # Check if current user is an admin
+        user = User.query.get(current_user_id)
+        if not user or not user.is_admin:
+            return jsonify({"message": "Uautoriseret: Du har ikke adgang til denne lokation"}), 403
+
+    try:
+        # Before deleting a location, check if it's used in any trips
+        # This prevents breaking foreign key constraints
+        trips_using_location = Trip.query.filter(
+            (Trip.start_location_id == location_id) | (Trip.end_location_id == location_id)
+        ).count()
+
+        if trips_using_location > 0:
+            return jsonify({"message": "Kan ikke slette lokation. Den bruges i eksisterende ture."}), 400
+
+        db.session.delete(location)
+        db.session.commit()
+        return jsonify({"message": "Lokation slettet!"}), 200
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Fejl ved sletning af lokation: {e}", exc_info=True)
+        return jsonify({"message": f"Fejl ved sletning af lokation: {str(e)}"}), 500
 # Trips API
 @app.route('/api/trips', methods=['POST'])
 @jwt_required() # Protect this route
