@@ -1,0 +1,19 @@
+
+https://download.geofabrik.de/
+
+podman run -d -it --name osrm-server -p 5001:5000 \
+    -v ./osrm-data:/data \
+    docker.io/osrm/osrm-backend \
+    osrm-extract -p /opt/car.lua /data/denmark-latest.osm.pbf && \
+    osrm-partition /data/denmark-latest.osrm && \
+    osrm-customize /data/denmark-latest.osrm
+
+podman rm -f osrm-server
+
+podman run -d -it --name osrm-server -p 5001:5000 \
+    -v ./osrm-data:/data \
+    docker.io/osrm/osrm-backend \
+    docker.io/osrm/osrm-backend     osrm-routed --algorithm MLD /data/denmark-latest.osrm
+
+
+podman run -it --name nominatim-local-server   -p 8080:8080   -v ./osm-data:/nominatim   -v ./nominatim-data:/var/lib/postgresql/16/main   --env-file <(echo 'NOMINATIM_PROFILES=country') -e PBF_URL=https://download.geofabrik.de/europe/denmark-latest.osm.pbf -e REPLICATION_URL=https://download.geofabrik.de/europe/denmark-updates/  docker.io/mediagis/nominatim:5.1
