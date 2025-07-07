@@ -457,6 +457,7 @@ def delete_location(location_id):
         db.session.rollback()
         app.logger.error(f"Fejl ved sletning af lokation: {e}", exc_info=True)
         return jsonify({"message": f"Fejl ved sletning af lokation: {str(e)}"}), 500
+
 # Trips API
 @app.route('/api/trips', methods=['POST'])
 @jwt_required() # Protect this route
@@ -469,6 +470,9 @@ def create_trip():
     end_location_id = data.get('end_location_id')
     purpose = data.get('purpose')
     is_return_trip = data.get('is_return_trip', False)
+    
+    # NEW: Get manually entered distance from frontend payload
+    manual_distance_km = data.get('distance_km') 
 
     if not all([date_str, start_location_id, end_location_id, purpose]):
         return jsonify(message="Mangler påkrævede data for turen"), 400
@@ -484,13 +488,19 @@ def create_trip():
     if not start_loc or not end_loc:
         return jsonify(message="Start- eller slutlokation ikke fundet."), 404
 
-    # Calculate distance once for the outbound trip
     calculated_distance = None
     if start_loc and end_loc:
         calculated_distance = calculate_distance(
             start_loc.latitude, start_loc.longitude,
             end_loc.latitude, end_loc.longitude
         )
+
+    # Determine the final distance for the outbound trip
+    final_outbound_distance = None
+    if manual_distance_km is not None and isinstance(manual_distance_km, (int, float)):
+        final_outbound_distance = float(manual_distance_km) # Use manual if provided and valid
+    else:
+        final_outbound_distance = calculated_distance # Otherwise, use calculated
 
     # Create the first trip (outbound)
     new_trip = Trip(
@@ -499,20 +509,26 @@ def create_trip():
         start_location_id=start_location_id,
         end_location_id=end_location_id,
         purpose=purpose,
-        distance_km=calculated_distance # Save the calculated distance
+        distance_km=final_outbound_distance # Use the determined final_distance
     )
     db.session.add(new_trip)
     db.session.commit()
 
     # If return trip is selected, create another trip
     if is_return_trip:
-        return_distance = None
-        if start_loc and end_loc:
-             # Calculate return distance (swapped start and end locations)
-             return_distance = calculate_distance(
+        # For return trip, if a manual return distance is sent (optional, not currently in frontend)
+        # You'd add `manual_return_distance_km = data.get('return_distance_km')` here if needed.
+        
+        return_calculated_distance = None
+        if start_loc and end_loc: # Note: start and end are swapped for return
+             return_calculated_distance = calculate_distance(
                 end_loc.latitude, end_loc.longitude,
                 start_loc.latitude, start_loc.longitude
              )
+        
+        # For simplicity, for the return trip, we'll just use the calculated distance
+        # unless you also want a separate manual input for the return trip distance.
+        final_return_distance = return_calculated_distance
 
         return_trip = Trip(
             user_id=current_user_id,
@@ -520,7 +536,7 @@ def create_trip():
             start_location_id=end_location_id, # Swapped start and end
             end_location_id=start_location_id, # Swapped start and end
             purpose=f"Retur ({purpose})",
-            distance_km=return_distance # Save the return distance
+            distance_km=final_return_distance # Use the determined final_return_distance
         )
         db.session.add(return_trip)
         db.session.commit()
@@ -528,6 +544,7 @@ def create_trip():
         return jsonify(message="Tur og returkørsel oprettet", trip_id=new_trip.id, return_trip_id=return_trip.id), 201
     else:
         return jsonify(message="Tur oprettet", trip_id=new_trip.id), 201
+
 
 @app.route('/api/trips', methods=['GET'])
 @jwt_required()
@@ -539,6 +556,87 @@ def get_trips():
     for trip in user_trips:
         trips_data.append(trip.to_dict()) # Use the to_dict method to get all trip details
     return jsonify(trips_data), 200
+
+# NEW: Endpoint for updating and deleting a specific trip
+@app.route('/api/trips/<int:trip_id>', methods=['PUT', 'DELETE'])
+@jwt_required()
+def trip_detail_operations(trip_id):
+    current_user_id = int(get_jwt_identity())
+    trip = Trip.query.get(trip_id)
+
+    if not trip:
+        return jsonify({"message": "Tur ikke fundet"}), 404
+
+    user = User.query.get(current_user_id)
+    if trip.user_id != current_user_id and (not user or not user.is_admin):
+        return jsonify({"message": "Uautoriseret: Du har ikke adgang til denne tur"}), 403
+
+    if request.method == 'PUT':
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "Intet inputdata angivet"}), 400
+
+        date_str = data.get('date')
+        start_location_id = data.get('start_location_id')
+        end_location_id = data.get('end_location_id')
+        purpose = data.get('purpose')
+        
+        # This part of the PUT endpoint is already correctly prioritizing manual input
+        # if provided, otherwise recalculating.
+        distance_km = data.get('distance_km') 
+
+        try:
+            if date_str:
+                trip.date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            if start_location_id is not None:
+                start_loc = Location.query.get(start_location_id)
+                if not start_loc:
+                    return jsonify({"message": "Startlokation ikke fundet."}), 404
+                trip.start_location_id = start_location_id
+                trip.start_location = start_loc
+
+            if end_location_id is not None:
+                end_loc = Location.query.get(end_location_id)
+                if not end_loc:
+                    return jsonify({"message": "Slutlokation ikke fundet."}), 404
+                trip.end_location_id = end_location_id
+                trip.end_location = end_loc
+            
+            if purpose is not None:
+                trip.purpose = purpose
+            
+            if trip.start_location and trip.end_location:
+                if distance_km is not None and (isinstance(distance_km, (int, float))):
+                    trip.distance_km = float(distance_km)
+                else:
+                    trip.distance_km = calculate_distance(
+                        trip.start_location.latitude, trip.start_location.longitude,
+                        trip.end_location.latitude, trip.end_location.longitude
+                    )
+            else:
+                trip.distance_km = None
+
+            db.session.commit()
+            db.session.refresh(trip)
+            return jsonify({"message": "Tur opdateret!", "trip": trip.to_dict()}), 200
+        except ValueError:
+            db.session.rollback()
+            return jsonify({"message": "Ugyldigt dataformat (f.eks. dato eller afstand)"}), 400
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Fejl ved opdatering af tur (ID: {trip_id}): {e}", exc_info=True)
+            return jsonify({"message": f"Fejl ved opdatering af tur: {str(e)}"}), 500
+
+    elif request.method == 'DELETE':
+        try:
+            db.session.delete(trip)
+            db.session.commit()
+            return jsonify({"message": "Tur slettet!"}), 200
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Fejl ved sletning af tur (ID: {trip_id}): {e}", exc_info=True)
+            return jsonify({"message": f"Fejl ved sletning af tur: {str(e)}"}), 500
+
 
 # --- Main Run Block ---
 if __name__ == '__main__':
