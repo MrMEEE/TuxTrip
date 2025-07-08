@@ -3,6 +3,8 @@ import math
 import functools
 import requests
 import logging
+import polyline
+import json
 
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
@@ -168,7 +170,8 @@ with app.app_context():
 # --- Utility Functions ---
 
 NOMINATIM_URL = "http://localhost:8080/search" # Your Nominatim container
-OSRM_URL = "http://localhost:5000/route/v1/driving" # Your OSRM container
+OSRM_URL = "http://localhost:5001/route/v1/driving" # Your OSRM container
+OSRM_BASE_URL = "http://localhost:5001" # Your OSRM base URL
 
 def lookup_address_nominatim(query): # Renamed 'address' to 'query' for clarity
     params = {
@@ -199,16 +202,25 @@ def lookup_address_nominatim(query): # Renamed 'address' to 'query' for clarity
         return [] # Return empty list on error
 
 def get_route_distance_osrm(start_lat, start_lon, end_lat, end_lon):
+    """
+    Fetches route data from OSRM.
+    Returns a dictionary with 'distance_meters' and 'geometry_encoded' (OSRM polyline string).
+    Returns None if route cannot be found or on error.
+    """
     # OSRM expects coordinates as longitude,latitude
     coords = f"{start_lon},{start_lat};{end_lon},{end_lat}"
-    url = f"{OSRM_URL}/{coords}?overview=false" # overview=false for faster response, only distance needed
+    # Change overview=false to overview=full to get the polyline geometry
+    url = f"{OSRM_URL}/{coords}?overview=full"
 
     try:
         response = requests.get(url)
         response.raise_for_status()
         data = response.json()
         if data and data['code'] == 'Ok' and data['routes']:
-            return data['routes'][0]['distance'] # Distance in meters
+            return {
+                "distance_meters": data['routes'][0]['distance'], # Distance in meters
+                "geometry_encoded": data['routes'][0]['geometry'] # Polyline encoded string
+            }
         return None
     except requests.exceptions.RequestException as e:
         app.logger.error(f"OSRM API fejl: {e}")
@@ -216,6 +228,35 @@ def get_route_distance_osrm(start_lat, start_lon, end_lat, end_lon):
     except Exception as e:
         app.logger.error(f"Fejl ved parsing af OSRM data: {e}")
         return None
+
+@app.route('/api/route-data', methods=['GET'])
+@jwt_required()
+def get_route_data():
+    start_lat = request.args.get('start_lat', type=float)
+    start_lon = request.args.get('start_lon', type=float)
+    end_lat = request.args.get('end_lat', type=float)
+    end_lon = request.args.get('end_lon', type=float)
+
+    if None in [start_lat, start_lon, end_lat, end_lon]:
+        return jsonify({"message": "Missing start/end coordinates"}), 400
+
+    # Call the modified OSRM function
+    osrm_result = get_route_distance_osrm(start_lat, start_lon, end_lat, end_lon)
+
+    if osrm_result:
+        # Use your existing calculate_distance for the actual distance shown to user
+        # This ensures consistency with how distances are stored for trips.
+        calculated_distance_km = calculate_distance(start_lat, start_lon, end_lat, end_lon)
+
+        # Decode the polyline geometry for the frontend
+        decoded_geometry = polyline.decode(osrm_result["geometry_encoded"])
+
+        return jsonify({
+            "distance_km": calculated_distance_km, # Use your haversine distance
+            "geometry": decoded_geometry # List of [lat, lon] pairs
+        }), 200
+    else:
+        return jsonify({"message": "Could not get route data from OSRM"}), 500
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371.0  # Radius af Jorden i kilometer
