@@ -35,7 +35,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False # Suppress warning
 db = SQLAlchemy(app)
 
 # --- JWT Configuration ---
-app.config["JWT_SECRET_KEY"] = "din-super-hemmelige-nøgle-du-skal-ændre-i-" # !!! CHANGE THIS IN PRODUCTION !!!
+app.config["JWT_SECRET_KEY"] = "your-super-secret-key-you-must-change-in-" # !!! CHANGE THIS IN PRODUCTION !!!
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24) # Tokens expire after 24 hours
 jwt = JWTManager(app)
 
@@ -63,7 +63,7 @@ def admin_required():
             if claims and claims.get("is_admin"): # Check if claims exist and is_admin is True
                 return fn(*args, **kwargs)
             else:
-                return jsonify(message="Administrator rettigheder krævet"), 403
+                return jsonify(message="Administrator rights required"), 403
         return decorated_view
     return wrapper
 
@@ -195,10 +195,10 @@ def lookup_address_nominatim(query): # Renamed 'address' to 'query' for clarity
         return suggestions # Return a list of dictionaries
 
     except requests.exceptions.RequestException as e:
-        app.logger.error(f"Nominatim API fejl: {e}")
+        app.logger.error(f"Nominatim API error: {e}")
         return [] # Return empty list on error
     except Exception as e:
-        app.logger.error(f"Fejl ved parsing af Nominatim data: {e}")
+        app.logger.error(f"Error parsing Nominatim data: {e}")
         return [] # Return empty list on error
 
 def get_route_distance_osrm(start_lat, start_lon, end_lat, end_lon):
@@ -223,10 +223,10 @@ def get_route_distance_osrm(start_lat, start_lon, end_lat, end_lon):
             }
         return None
     except requests.exceptions.RequestException as e:
-        app.logger.error(f"OSRM API fejl: {e}")
+        app.logger.error(f"OSRM API error: {e}")
         return None
     except Exception as e:
-        app.logger.error(f"Fejl ved parsing af OSRM data: {e}")
+        app.logger.error(f"Error parsing OSRM data: {e}")
         return None
 
 @app.route('/api/route-data', methods=['GET'])
@@ -259,7 +259,7 @@ def get_route_data():
         return jsonify({"message": "Could not get route data from OSRM"}), 500
 
 def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0  # Radius af Jorden i kilometer
+    R = 6371.0  # Radius of the Earth in kilometers
 
     lat1_rad = math.radians(lat1)
     lon1_rad = math.radians(lon1)
@@ -273,7 +273,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     distance = R * c
-    return round(distance, 2) # Afrund til 2 decimaler
+    return round(distance, 2) # Round to 2 decimals
 
 # --- API Endpoints ---
 
@@ -291,7 +291,7 @@ def login():
         access_token = create_access_token(identity=str(user.id)) # Ensure identity is a string
         return jsonify(access_token=access_token, username=user.username, is_admin=user.is_admin), 200
     else:
-        return jsonify({"message": "Forkert brugernavn eller password"}), 401
+        return jsonify({"message": "Incorrect username or password"}), 401
 
 # Admin API Endpoints
 @app.route('/api/admin/users', methods=['POST'])
@@ -303,16 +303,16 @@ def admin_create_user():
     is_admin = data.get('is_admin', False)
 
     if not username or not password:
-        return jsonify({"message": "Brugernavn og password er påkrævet"}), 400
+        return jsonify({"message": "Username and password are required"}), 400
 
     if User.query.filter_by(username=username).first():
-        return jsonify({"message": "Brugernavn eksisterer allerede"}), 409
+        return jsonify({"message": "Username already exists"}), 409
 
     new_user = User(username=username, is_admin=is_admin)
     new_user.set_password(password)
     db.session.add(new_user)
     db.session.commit()
-    return jsonify({"message": "Bruger oprettet!", "user": new_user.to_dict()}), 201
+    return jsonify({"message": "User created!", "user": new_user.to_dict()}), 201
 
 @app.route('/api/admin/users', methods=['GET'])
 @admin_required() # Only admins can view users
@@ -325,7 +325,7 @@ def admin_get_users():
 def admin_update_user(user_id):
     user = User.query.get(user_id)
     if not user:
-        return jsonify({"message": "Bruger ikke fundet"}), 404
+        return jsonify({"message": "User not found"}), 404
 
     data = request.get_json()
     username = data.get('username')
@@ -336,7 +336,7 @@ def admin_update_user(user_id):
         # Check if username is being changed to an existing one
         existing_user = User.query.filter(User.username == username, User.id != user_id).first()
         if existing_user:
-            return jsonify({"message": "Brugernavn eksisterer allerede"}), 409
+            return jsonify({"message": "Username already exists"}), 409
         user.username = username
     if password:
         user.set_password(password)
@@ -344,7 +344,7 @@ def admin_update_user(user_id):
         user.is_admin = is_admin
 
     db.session.commit()
-    return jsonify({"message": "Bruger opdateret!", "user": user.to_dict()}), 200
+    return jsonify({"message": "User updated!", "user": user.to_dict()}), 200
 
 @app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
 @admin_required()
@@ -352,11 +352,11 @@ def admin_delete_user(user_id):
     # Prevent admin from deleting themselves
     current_user_id = int(get_jwt_identity()) # Cast to int for comparison with user_id
     if user_id == current_user_id:
-        return jsonify({"message": "Du kan ikke slette din egen administratorbruger"}), 403
+        return jsonify({"message": "You cannot delete your own administrator user"}), 403
 
     user = User.query.get(user_id)
     if not user:
-        return jsonify({"message": "Bruger ikke fundet"}), 404
+        return jsonify({"message": "User not found"}), 404
 
     # Delete associated locations and trips first
     Location.query.filter_by(user_id=user_id).delete()
@@ -364,14 +364,14 @@ def admin_delete_user(user_id):
 
     db.session.delete(user)
     db.session.commit()
-    return jsonify({"message": "Bruger og tilknyttede data slettet!"}), 200
+    return jsonify({"message": "User and associated data deleted!"}), 200
 
 # Location API
 @app.route('/api/lookup-address', methods=['GET'])
 def lookup_address():
     query = request.args.get('address') # Renamed 'address' to 'query'
     if not query:
-        return jsonify({"message": "Adresseparameter (query) mangler"}), 400
+        return jsonify({"message": "Address parameter (query) is missing"}), 400
     
     # Now call the modified lookup_address_nominatim which returns a list
     suggestions = lookup_address_nominatim(query)
@@ -392,7 +392,7 @@ def create_location():
     description = data.get('description')
 
     if not all([name, latitude is not None, longitude is not None]): # Simplified check
-        return jsonify({"message": "Navn, breddegrad og længdegrad er påkrævet"}), 400
+        return jsonify({"message": "Name, latitude, and longitude are required"}), 400
 
     try:
         new_location = Location(
@@ -405,13 +405,13 @@ def create_location():
         )
         db.session.add(new_location)
         db.session.commit()
-        return jsonify({"message": "Lokation oprettet!", "location": new_location.to_dict()}), 201
+        return jsonify({"message": "Location created!", "location": new_location.to_dict()}), 201
     except ValueError:
-        return jsonify({"message": "Ugyldige breddegrad/længdegrad værdier"}), 400
+        return jsonify({"message": "Invalid latitude/longitude values"}), 400
     except Exception as e:
         db.session.rollback()
-        app.logger.error(f"Fejl ved oprettelse af lokation: {e}", exc_info=True) # Log full traceback
-        return jsonify({"message": f"Fejl ved oprettelse af lokation: {str(e)}"}), 500
+        app.logger.error(f"Error creating location: {e}", exc_info=True) # Log full traceback
+        return jsonify({"message": f"Error creating location: {str(e)}"}), 500
 
 @app.route('/api/locations', methods=['GET'])
 @jwt_required() # Protect this route
@@ -428,14 +428,14 @@ def update_location(location_id):
     location = Location.query.get(location_id)
 
     if not location:
-        return jsonify({"message": "Lokation ikke fundet"}), 404
+        return jsonify({"message": "Location not found"}), 404
 
     # Ensure the user owns this location or is an admin
     if location.user_id != current_user_id:
         # Check if current user is an admin
         user = User.query.get(current_user_id)
         if not user or not user.is_admin:
-            return jsonify({"message": "Uautoriseret: Du har ikke adgang til denne lokation"}), 403
+            return jsonify({"message": "Unauthorized: You do not have access to this location"}), 403
 
     data = request.get_json()
     name = data.get('name')
@@ -445,7 +445,7 @@ def update_location(location_id):
     description = data.get('description')
 
     if not all([name, latitude is not None, longitude is not None]):
-        return jsonify({"message": "Navn, breddegrad og længdegrad er påkrævet"}), 400
+        return jsonify({"message": "Name, latitude, and longitude are required"}), 400
 
     try:
         location.name = name
@@ -455,14 +455,14 @@ def update_location(location_id):
         location.description = description # description can be None
 
         db.session.commit()
-        return jsonify({"message": "Lokation opdateret!", "location": location.to_dict()}), 200
+        return jsonify({"message": "Location updated!", "location": location.to_dict()}), 200
     except ValueError:
         db.session.rollback()
-        return jsonify({"message": "Ugyldige breddegrad/længdegrad værdier"}), 400
+        return jsonify({"message": "Invalid latitude/longitude values"}), 400
     except Exception as e:
         db.session.rollback()
-        app.logger.error(f"Fejl ved opdatering af lokation: {e}", exc_info=True)
-        return jsonify({"message": f"Fejl ved opdatering af lokation: {str(e)}"}), 500
+        app.logger.error(f"Error updating location: {e}", exc_info=True)
+        return jsonify({"message": f"Error updating location: {str(e)}"}), 500
 
 
 @app.route('/api/locations/<int:location_id>', methods=['DELETE'])
@@ -472,14 +472,14 @@ def delete_location(location_id):
     location = Location.query.get(location_id)
 
     if not location:
-        return jsonify({"message": "Lokation ikke fundet"}), 404
+        return jsonify({"message": "Location not found"}), 404
 
     # Ensure the user owns this location or is an admin
     if location.user_id != current_user_id:
         # Check if current user is an admin
         user = User.query.get(current_user_id)
         if not user or not user.is_admin:
-            return jsonify({"message": "Uautoriseret: Du har ikke adgang til denne lokation"}), 403
+            return jsonify({"message": "Unauthorized: You do not have access to this location"}), 403
 
     try:
         # Before deleting a location, check if it's used in any trips
@@ -489,15 +489,15 @@ def delete_location(location_id):
         ).count()
 
         if trips_using_location > 0:
-            return jsonify({"message": "Kan ikke slette lokation. Den bruges i eksisterende ture."}), 400
+            return jsonify({"message": "Cannot delete location. It is used in existing trips."}), 400
 
         db.session.delete(location)
         db.session.commit()
-        return jsonify({"message": "Lokation slettet!"}), 200
+        return jsonify({"message": "Location deleted!"}), 200
     except Exception as e:
         db.session.rollback()
-        app.logger.error(f"Fejl ved sletning af lokation: {e}", exc_info=True)
-        return jsonify({"message": f"Fejl ved sletning af lokation: {str(e)}"}), 500
+        app.logger.error(f"Error deleting location: {e}", exc_info=True)
+        return jsonify({"message": f"Error deleting location: {str(e)}"}), 500
 
 # Trips API
 @app.route('/api/trips', methods=['POST'])
@@ -516,18 +516,18 @@ def create_trip():
     manual_distance_km = data.get('distance_km') 
 
     if not all([date_str, start_location_id, end_location_id, purpose]):
-        return jsonify(message="Mangler påkrævede data for turen"), 400
+        return jsonify(message="Missing required data for the trip"), 400
 
     try:
         trip_date = datetime.strptime(date_str, '%Y-%m-%d').date()
     except ValueError:
-        return jsonify(message="Ugyldigt datoformat. Brug YYYY-MM-DD."), 400
+        return jsonify(message="Invalid date format. Use YYYY-MM-DD."), 400
 
     start_loc = Location.query.get(start_location_id)
     end_loc = Location.query.get(end_location_id)
 
     if not start_loc or not end_loc:
-        return jsonify(message="Start- eller slutlokation ikke fundet."), 404
+        return jsonify(message="Start or end location not found."), 404
 
     calculated_distance = None
     if start_loc and end_loc:
@@ -576,15 +576,15 @@ def create_trip():
             date=trip_date,
             start_location_id=end_location_id, # Swapped start and end
             end_location_id=start_location_id, # Swapped start and end
-            purpose=f"Retur ({purpose})",
+            purpose=f"Return ({purpose})",
             distance_km=final_return_distance # Use the determined final_return_distance
         )
         db.session.add(return_trip)
         db.session.commit()
 
-        return jsonify(message="Tur og returkørsel oprettet", trip_id=new_trip.id, return_trip_id=return_trip.id), 201
+        return jsonify(message="Trip and return trip created", trip_id=new_trip.id, return_trip_id=return_trip.id), 201
     else:
-        return jsonify(message="Tur oprettet", trip_id=new_trip.id), 201
+        return jsonify(message="Trip created", trip_id=new_trip.id), 201
 
 
 @app.route('/api/trips', methods=['GET'])
@@ -606,16 +606,16 @@ def trip_detail_operations(trip_id):
     trip = Trip.query.get(trip_id)
 
     if not trip:
-        return jsonify({"message": "Tur ikke fundet"}), 404
+        return jsonify({"message": "Trip not found"}), 404
 
     user = User.query.get(current_user_id)
     if trip.user_id != current_user_id and (not user or not user.is_admin):
-        return jsonify({"message": "Uautoriseret: Du har ikke adgang til denne tur"}), 403
+        return jsonify({"message": "Unauthorized: You do not have access to this trip"}), 403
 
     if request.method == 'PUT':
         data = request.get_json()
         if not data:
-            return jsonify({"message": "Intet inputdata angivet"}), 400
+            return jsonify({"message": "No input data provided"}), 400
 
         date_str = data.get('date')
         start_location_id = data.get('start_location_id')
@@ -632,14 +632,14 @@ def trip_detail_operations(trip_id):
             if start_location_id is not None:
                 start_loc = Location.query.get(start_location_id)
                 if not start_loc:
-                    return jsonify({"message": "Startlokation ikke fundet."}), 404
+                    return jsonify({"message": "Start location not found."}), 404
                 trip.start_location_id = start_location_id
                 trip.start_location = start_loc
 
             if end_location_id is not None:
                 end_loc = Location.query.get(end_location_id)
                 if not end_loc:
-                    return jsonify({"message": "Slutlokation ikke fundet."}), 404
+                    return jsonify({"message": "End location not found."}), 404
                 trip.end_location_id = end_location_id
                 trip.end_location = end_loc
             
@@ -659,24 +659,24 @@ def trip_detail_operations(trip_id):
 
             db.session.commit()
             db.session.refresh(trip)
-            return jsonify({"message": "Tur opdateret!", "trip": trip.to_dict()}), 200
+            return jsonify({"message": "Trip updated!", "trip": trip.to_dict()}), 200
         except ValueError:
             db.session.rollback()
-            return jsonify({"message": "Ugyldigt dataformat (f.eks. dato eller afstand)"}), 400
+            return jsonify({"message": "Invalid data format (e.g., date or distance)"}), 400
         except Exception as e:
             db.session.rollback()
-            app.logger.error(f"Fejl ved opdatering af tur (ID: {trip_id}): {e}", exc_info=True)
-            return jsonify({"message": f"Fejl ved opdatering af tur: {str(e)}"}), 500
+            app.logger.error(f"Error updating trip (ID: {trip_id}): {e}", exc_info=True)
+            return jsonify({"message": f"Error updating trip: {str(e)}"}), 500
 
     elif request.method == 'DELETE':
         try:
             db.session.delete(trip)
             db.session.commit()
-            return jsonify({"message": "Tur slettet!"}), 200
+            return jsonify({"message": "Trip deleted!"}), 200
         except Exception as e:
             db.session.rollback()
-            app.logger.error(f"Fejl ved sletning af tur (ID: {trip_id}): {e}", exc_info=True)
-            return jsonify({"message": f"Fejl ved sletning af tur: {str(e)}"}), 500
+            app.logger.error(f"Error deleting trip (ID: {trip_id}): {e}", exc_info=True)
+            return jsonify({"message": f"Error deleting trip: {str(e)}"}), 500
 
 
 # --- Main Run Block ---
